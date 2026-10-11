@@ -1,122 +1,131 @@
-# MapleFreight Late-Shipment Prediction: Project Workflow
+# MapleFreight: Delivery Delay Prediction & Slack Alerts
 
-End-to-end system that predicts which in-transit shipments will arrive late and alerts dispatch in Slack early enough to re-route or warn the customer.
+AML 3303, Assessment 1 · David Aponte Monroy
 
-## 1. Context
+An end-to-end system that predicts which in-transit shipments will be delivered late and posts an alert to the `#dispatch-alerts` Slack channel while dispatch still has time to re-route or warn the customer.
 
-- MapleFreight finds delays only after the delivery window has passed.
-- Consequences: paid-out service credits, expedited re-deliveries, and complaints reaching the account manager before dispatch knows anything is wrong.
-- Role: Data Scientist. Deliverable: a prediction pipeline plus a live alerting channel.
+## Problem
 
-## 2. Problem Statement
+MapleFreight finds delays only after the delivery window has passed. By then it has paid service credits, booked expedited re-deliveries and received complaints that reach the account manager before dispatch knows anything is wrong. On-time performance has dropped from 94% to 88% this year.
 
-- Detect, while a shipment is still in transit, whether it will miss its delivery window.
-- Shift the company from reactive (post-delay) to proactive (pre-delay) operations.
-- Framing: binary classification (`late` = actual arrival > promised window end), scored on in-transit shipments at regular intervals.
+**Objectives**
 
-## 3. Objective
+1. Analyse shipment, route and carrier data to find the main drivers of late delivery.
+2. Build a model that classifies whether a shipment will be delivered late.
+3. Notify dispatch in Slack about high-risk shipments automatically.
+4. Give actionable recommendations to improve on-time performance.
 
-- Business: cut service credits, expedited re-deliveries, and escalated complaints.
-- Technical: a model with high recall on late shipments at a precision dispatch can tolerate (avoid alert fatigue), producing a calibrated risk score.
-- Operational: a Slack alert with enough lead time to act, including shipment ID, customer, route, risk score, and top reasons.
+## Dataset
 
-## 4. Data Understanding
+`maplefreight_delivery_delay_dataset.csv` (included in this repository) has 6,035 shipments and 23 columns. The target is `delivered_late` (1 = missed the promised window), and about 21% of shipments are late.
 
-- Inventory sources: shipments (origin, destination, carrier, service level, weight/volume), promised vs. actual timestamps, tracking events/scans, route/lane info, weather, holidays, customer/account data.
-- Check grain (one row per shipment vs. per event), keys, date ranges, data volume, and class balance (% late).
-- Identify the label and the **prediction time**: what is known at each point in transit.
-- Flag leakage risks: fields recorded after delivery, final status codes, actual transit time.
+Cleaning applied in the notebook:
 
-## 5. Exploratory Data Analysis (EDA)
+| Issue                                                                         | Fix                                                                                     |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| 32 exact duplicates and 3 repeated`shipment_id`s                            | Removed, leaving 6,000 rows                                                             |
+| `service_level` spelled both `Standard` and `standard`                  | Mapped to the most frequent spelling                                                    |
+| 40`weight_kg` values entered in grams (170,000 to 3,000,000)                | Divided by 1,000                                                                        |
+| Missing values in fuel cost, driver experience, weather and traffic (2 to 4%) | Median or`"Unknown"` imputation inside the sklearn pipeline, plus missing-value flags |
+| `actual_transit_hours` is only known after delivery (leakage)               | Dropped from the features                                                               |
 
-- Late rate overall and by carrier, lane, service level, origin/destination, day of week, month, and season.
-- Distributions of transit time, distance, weight; outliers and impossible values.
-- Missing-value patterns and duplicates.
-- Late rate vs. progress in transit (where on the route do delays appear?).
-- Correlations and early signals (e.g., late first-leg departure, scan gaps, weather events).
-- Time trends and drift (is the late rate changing?).
+## Repository contents
 
-## 6. Data Preprocessing
+| File                                                      | Purpose                                               |
+| --------------------------------------------------------- | ----------------------------------------------------- |
+| `MapleFreight_Delivery_Delay_Prediction_C0967956.ipynb` | Full notebook, run top to bottom with outputs         |
+| `maplefreight_delivery_delay_dataset.csv`               | Raw dataset                                           |
+| `screenshots/slack_alert.png`                           | The Slack alert as it appeared in`#dispatch-alerts` |
+| `requirements.txt`                                      | Python dependencies                                   |
+| `.env.example`                                          | Template for the Slack webhook variable               |
+| `.gitignore`                                            | Keeps`.env` (the real webhook) out of git           |
 
-- Parse timestamps and standardize time zones.
-- Remove duplicates; fix invalid records (negative durations, delivery before pickup).
-- Handle missing values (impute by group median/mode, add missing-indicator flags where informative).
-- Treat outliers (cap/winsorize or keep if genuine).
-- Encode and clean categoricals (normalize carrier/lane names, group rare categories).
-- Build the label from promised vs. actual delivery times.
+## How to run
 
-## 7. Feature Engineering
+```bash
+git clone <this-repo>
+cd <this-repo>
+python -m venv .venv
+.venv\Scripts\activate            # Windows  (macOS/Linux: source .venv/bin/activate)
+pip install -r requirements.txt
 
-- **Time:** hour, day of week, month, holiday/weekend flags, time until promised delivery, time elapsed since pickup.
-- **Route:** distance, lane, origin-destination pair, number of legs/stops, cross-border flag.
-- **Progress:** % of route completed, hours since last scan, delay at last checkpoint vs. plan, departure delay.
-- **Historical (as of prediction time only):** rolling late rate by carrier, lane, and customer.
-- **External:** weather severity along route, traffic or congestion, holiday volume.
-- **Shipment:** weight, volume, service level, customer tier.
-- All features computed using only information available at prediction time (no leakage).
+copy .env.example .env            # macOS/Linux: cp .env.example .env
+# edit .env and paste your Slack Incoming Webhook URL into WEBHOOK_URL
 
-## 8. Data Preparation
+jupyter notebook MapleFreight_Delivery_Delay_Prediction_C0967956.ipynb   # Kernel > Restart & Run All
+```
 
-- Time-based train / validation / test split (train on the past, test on the future) to mirror production.
-- Fit encoders, scalers, and imputers on training data only; wrap them in a single sklearn `Pipeline` / `ColumnTransformer`.
-- Handle class imbalance: class weights, or resampling on the training set only.
-- Freeze the feature list and schema for reuse in serving.
+Slack setup: create a workspace and a `#dispatch-alerts` channel, create a Slack app, turn on **Incoming Webhooks**, add a webhook for that channel and paste its URL into `.env`. If `WEBHOOK_URL` is not set, the notebook still runs and skips the post. The webhook URL is never printed.
 
-## 9. Data Modelling
 
-- Baselines: majority class and logistic regression.
-- Candidates: Random Forest, XGBoost / LightGBM, optionally CatBoost for categorical-heavy data.
-- Hyperparameter tuning with time-series cross-validation (Optuna or randomized search).
-- Probability calibration (Platt or isotonic) so scores are meaningful risk levels.
-- Select the final model on validation metrics, not test.
+**Workflow**
 
-## 10. Model Evaluation
+1. Contex
+2. Problem statement
+3. Objectives
+4. Data understanding (data quality audit)
+5. Data preprocessing (cleaning)
+6. Exploratory data analysis (EDA)
+7. Feature engineering
+8. Data preparation (split + preprocessing pipeline)
+9. Data modelling (baseline vs. candidates)
+10. Model evaluation and threshold selection
+11. Model explainability
+12. Slack alert integration
+13. Recommendations
 
-- Metrics: PR-AUC, ROC-AUC, recall, precision, F1/F2, confusion matrix, Brier score.
-- Choose the alert threshold by business cost (cost of a missed delay vs. a false alarm) and dispatch capacity.
-- Evaluate **lead time**: how many hours before the window closes the model flags a late shipment.
-- Slice analysis by carrier, lane, and customer tier to check consistent performance.
-- Final one-time score on the held-out test set versus the baseline.
+## Approach
 
-## 11. Model Explainability
+Data audit → cleaning → EDA → feature engineering → stratified 80/20 split → sklearn `Pipeline` (imputation, scaling, one-hot) → 5-fold CV comparison → threshold chosen on out-of-fold predictions → one-time test evaluation → permutation importance → Slack alert.
 
-- Global: feature importance and SHAP summary plots.
-- Local: per-shipment SHAP values, converted to a plain-language "top 3 reasons" (e.g., "left origin 6 h late", "storm on lane").
-- Use the reasons in the alert so dispatch can trust the score and choose the right action.
-- Sanity-check drivers against domain knowledge to catch leakage.
+Class imbalance is handled with `class_weight="balanced"`. Models are compared on PR-AUC, precision, recall and F1, not accuracy.
 
-## 12. Slack Alert Integration
+## Key findings
 
-- Scheduled scoring job (e.g., every 30-60 min) scores all in-transit shipments with the saved pipeline.
-- Trigger an alert when risk score ≥ threshold and the shipment has not been alerted already (deduplicate; re-alert only if risk rises materially).
-- Post via a Slack Incoming Webhook or the Slack Web API (`chat.postMessage`) using Block Kit:
-  - Shipment ID, customer, route, promised ETA, risk score, top reasons, suggested action (re-route / notify customer), link to the tracking page.
-- Store secrets (Slack token, DB credentials) in environment variables / a secrets manager.
-- Add logging, retries, and error alerts; track alert outcomes (acknowledged, delay averted, false alarm) for feedback.
-- Monitoring: data drift, score distribution, precision/recall on realized outcomes; retrain on a schedule.
+**Drivers of late delivery (EDA and model explainability)**
 
-## 13. Recommendations
+- **Weather:** storm 46% and snow 34% late vs. 14% for clear weather. This is the most important model feature.
+- **Carrier:** contract owner-operators 36% late vs. 13% for the MapleFreight fleet.
+- **Route complexity:** 12% late with no stops vs. 29% with 5. Longer distance and transit time also raise the risk.
+- **Conditions at dispatch:** heavy traffic (32% vs. 12%), route congestion, a pickup more than 30 minutes late (27% vs. 15%) and recent carrier lateness.
+- **Driver experience:** under 3 years 26% vs. over 10 years 14%. Economy service is late 27% of the time vs. 15% for Express.
+- **No signal:** customer tier (Gold accounts are late as often as Bronze) and destination.
 
-- Deploy as a pilot on high-impact lanes or key accounts first, then expand.
-- Review the threshold monthly with dispatch to balance missed delays against alert fatigue.
-- Feed alert outcomes back into training data (closed-loop learning).
-- Improve data capture: more frequent scan events, live weather and traffic feeds, carrier ETA updates.
-- Define action playbooks tied to risk bands (e.g., high risk → re-route; medium → proactive customer notice).
-- Track business KPIs: service credits paid, expedited re-deliveries, complaint escalations, on-time %.
+**Models**
 
-Pipeline at a Glance
+On the test set, each model uses its own threshold set for at least 75% recall:
 
-### `Raw data → Clean → Features → Time-split → Train/Tune → Calibrate → Evaluate → Explain (SHAP) → Score in-transit shipments → Threshold → Slack alert → Feedback & monitorin`
+| Model                                           | Precision       | Recall          | F1              | PR-AUC          | ROC-AUC         |
+| ----------------------------------------------- | --------------- | --------------- | --------------- | --------------- | --------------- |
+| Dummy (always "on time"), 79% accuracy          | 0.000           | 0.000           | 0.000           | 0.206           | 0.500           |
+| **Logistic Regression (baseline, final)** | **0.431** | **0.769** | **0.552** | **0.600** | **0.831** |
+| Random Forest                                   | 0.412           | 0.798           | 0.543           | 0.556           | 0.820           |
+| Tuned Hist Gradient Boosting                    | 0.426           | 0.781           | 0.551           | 0.551           | 0.819           |
 
-# Problem, dataset, how to run, key findings, your chosen threshold and why, and the AI usage section
+The baseline logistic regression stayed the best model. Tuned gradient boosting and random forest did not beat it on cross-validated PR-AUC (0.538 and 0.524 vs. 0.558). The risk factors act mostly additively, so a linear model captures them well and is easier to explain. Confusion matrix of the final model on the test set: **190 of 247 late shipments caught**, 57 missed, 251 false alarms and 702 correct "on time" predictions.
 
-Problem: At MapleFreight. Delays are currently found only after the delivery window has passed, which means paid-out service credits, expedited re-deliveries and complaints that reach the account manager before dispatch knows anything is wrong.
+## Alert threshold and why
 
-Goal: Build an end-to-end system that predicts which in-transit shipments will arrive late and alerts dispatch in Slack while there is still time to re-route or warn the customer.
+**Threshold = 0.47.** This is the highest risk score that still catches at least **75% of late shipments**. It was chosen on out-of-fold predictions from the training set, so the test set played no part in the choice.
 
-## Objectives
+- A missed delay costs a service credit, an expedited re-delivery and a complaint. A false alarm costs a dispatcher a few minutes, so recall is the priority.
+- At 0.47, about 2 in 5 alerts are real late shipments (precision 0.43), twice the 21% base rate. The F1-optimal threshold (0.56) would lose 9 points of recall for only 6 points of precision.
+- The threshold flags about 37% of shipments, so the Slack message gives the count and only the top 5 by risk. The recommended next step is two alert tiers (0.80 or more: act now; 0.47 to 0.80: digest), with the threshold reviewed monthly with dispatch.
 
-1. Analyze shipment, route and carrier data to identify the main drivers of late delivery.
-2. Build a predictive model that classifies whether a shipment will be delivered late.
-3. Integrate Slack alerts so dispatch is notified about high-risk shipments automatically.
-4. Provide actionable recommendations that improve on-time performance.
+## Recommendations
+
+1. A bad-weather playbook: add buffer time or warn the customer when the forecast is snow or storm.
+2. Send long and multi-stop loads to the company fleet first. Set on-time KPIs for owner-operators.
+3. Add time per stop and per distance to promised transit times. Revisit Economy promises.
+4. Treat a pickup more than 30 minutes late as a trigger to re-score and contact the customer.
+5. Tiered alerts, Gold accounts first, a pilot on owner-operator and long-haul lanes, and a monthly threshold review.
+
+## AI usage
+
+AI assistant used: **Claude Code (Anthropic, Claude Opus 5.5)**. I used it to structure the notebook, write the cleaning, modelling and Slack code, and draft the explanations. I reviewed and ran every cell myself.
+
+**Cases where the AI output was wrong:**
+
+1. **Spelling normalisation broke valid names.** To fix `standard` vs. `Standard`, the assistant first applied `.str.title()` to every categorical column. This also changed `Toronto ON` to `Toronto On` and `MapleFreight Fleet` to `Maplefreight Fleet`, which showed up as wrong names in the Slack message preview. The fix maps each case variant to its most frequent original spelling.
+2. **A wrong domain hypothesis.** The assistant assumed a late pickup would hurt short trips more and engineered `pickup_delay_ratio` for that reason. The pickup-delay × transit-time heatmap showed the opposite (long trips with late pickups are the worst, at 38% late), and the ratio turned out weaker than the raw delay (r = 0.03 vs. 0.13).
+3. **Parallel cross-validation crashed on Windows.** `n_jobs=-1` raised `BrokenProcessPool` inside Jupyter, so cross-validation now runs in a single process.

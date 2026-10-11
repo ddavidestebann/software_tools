@@ -1,2 +1,8 @@
-.env
-.env.example
+pandas>=2.2
+numpy>=1.26
+scikit-learn>=1.5
+matplotlib>=3.8
+seaborn>=0.13
+requests>=2.31
+python-dotenv>=1.0
+jupyter>=1.0

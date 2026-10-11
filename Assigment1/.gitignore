@@ -1,3 +1,7 @@
+# Secrets: the Slack webhook lives only in .env
 .env
-.env.example
-.csv
+
+# Python / Jupyter artefacts
+__pycache__/
+.ipynb_checkpoints/
+.venv/
