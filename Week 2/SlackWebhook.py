@@ -14,7 +14,7 @@ import time
 
 # Replace with your actual webhook URL
 WEBHOOK_URL = "https://hooks.slack.com/services/XXXXX/XXXXX/XXXXX"
-# https://hooks.slack.com/services/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
+
 
 def send_slack_message(message):
     payload = {"text": message}
