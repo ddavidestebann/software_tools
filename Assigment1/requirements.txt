@@ -6,3 +6,4 @@ seaborn>=0.13
 requests>=2.31
 python-dotenv>=1.0
 jupyter>=1.0
+python-dotenv>=1.0 
